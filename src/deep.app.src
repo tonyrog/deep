@@ -1,0 +1,6 @@
+{application, deep,
+ [{description, "Deep learning"},
+  {vsn, "0.1"},
+  {env, []},
+  {applications,[kernel,stdlib]}
+  ]}.
