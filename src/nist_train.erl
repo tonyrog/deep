@@ -14,7 +14,7 @@
 %%
 
 main() ->
-    {TrainingSet0,ValidationSet} = load2(2000,50),
+    {TrainingSet0,ValidationSet} = load2(5000,100),
     io:format("loaded\n"),
     Net = deep_net:new(784, [32,32], 10),
     TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
