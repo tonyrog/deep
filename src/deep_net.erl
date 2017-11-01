@@ -140,7 +140,7 @@ evaluate(Net, TestData) ->
 
 evaluate_(Net, [{X,Y}|TestData], Sum) ->
     Y1 = feed(Net, X),
-    Yi = hd(matrix:argmax(matrix:transpose(Y1))),
+    Yi = matrix:element(1,1,matrix:argmax(Y1,0))-1,
     %% io:format("Y = ~w, Yi = ~w\n", [Y, Yi]),
     if Y =:= Yi -> evaluate_(Net, TestData, Sum+1);
        true -> evaluate_(Net, TestData, Sum)

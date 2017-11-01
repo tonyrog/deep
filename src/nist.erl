@@ -19,7 +19,6 @@
 -export([read_label/2]).
 -export([read_label_number/2]).
 -export([read_label_vector/2]).
--export([image_to_vector/1]).
 -export([image_to_matrix/1]).
 -export([label_to_vector/1]).
 -export([label_to_matrix/1]).
@@ -71,10 +70,12 @@ read_image(F, I) when I >= 0 ->
 %% image as column vector (coded as matrix)
 image_to_vector(Bin) when is_binary(Bin) ->
     matrix:from_list([[ X/255] || <<X>> <= Bin ],float32).
+%%    matrix:transpose(matrix:from_list([[X/255 || <<X>> <= Bin ]],float32)).
 
 %% return the image as a column vector
 image_to_matrix(Bin) when is_binary(Bin) ->
     matrix:from_list([ [ X/255 ] || <<X>> <= Bin ],float32).
+%%    matrix:transpose(matrix:from_list([[ X/255 || <<X>> <= Bin ]],float32)).
 
 label_to_vector(N) when is_integer(N), N>=0, N=< 9 ->
     matrix:from_list([[I] || 
