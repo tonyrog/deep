@@ -14,18 +14,24 @@
 %%
 
 main() ->
+    main(30,[30]).
+
+main(Epochs,Hidden) ->
     {TrainingSet0,ValidationSet} = load2(5000,100),
     io:format("loaded 5000+100\n"),
-    Net = deep_net:new(784, [32,32], 10),
+    Net = deep_net:new(784,Hidden,10),
     TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
-    deep_net:sgd(Net, TrainingSet, ValidationSet, 20, 10, 0.9).
+    deep_net:sgd(Net, TrainingSet, ValidationSet, Epochs, 10, 3.0).
 
 main1() ->
+    main1(30,[30]).
+
+main1(Epochs,Hidden) ->
     {TrainingSet0,ValidationSet} = load2(50000,10000),
     io:format("loaded 50000+10000\n"),
-    Net = deep_net:new(784, [32,32], 10),
+    Net = deep_net:new(784,Hidden,10),
     TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
-    deep_net:sgd(Net, TrainingSet, ValidationSet, 30, 10, 3.0).
+    deep_net:sgd(Net, TrainingSet, ValidationSet, Epochs, 10, 3.0).
 
 load(N) ->
     {ok,Fd1} = nist:open_image_file(),
