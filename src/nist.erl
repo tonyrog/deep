@@ -19,7 +19,7 @@
 -export([read_label/2]).
 -export([read_label_number/2]).
 -export([read_label_vector/2]).
-%% -export([image_to_vector/1]).
+-export([image_to_vector/1]).
 -export([image_to_matrix/1]).
 -export([label_to_vector/1]).
 -export([label_to_matrix/1]).
@@ -68,15 +68,17 @@ read_image(F, I) when I >= 0 ->
     file:position(F#nist_image_file.fd, Pos),
     file:read(F#nist_image_file.fd, N).
 
-%% image as column vector (coded as matrix)
+%% image as vector (coded as matrix  1x28 )
+%% generate a column major column vector,
+%% transpose will onlu change from row-major to column-major
+%% order.
 image_to_vector(Bin) when is_binary(Bin) ->
-    matrix:from_list([[ X/255] || <<X>> <= Bin ],float32).
-%%    matrix:transpose(matrix:from_list([[X/255 || <<X>> <= Bin ]],float32)).
+    matrix:transpose(matrix:from_list([[X/255 || <<X>> <= Bin ]],float32)).
 
-%% return the image as a column vector
+%% return the image as 28x28 matrix of float32 in interval [0,1]
 image_to_matrix(Bin) when is_binary(Bin) ->
-    matrix:from_list([ [ X/255 ] || <<X>> <= Bin ],float32).
-%%    matrix:transpose(matrix:from_list([[ X/255 || <<X>> <= Bin ]],float32)).
+    Data = << << (X/255):32/native-float >> || <<X>> <= Bin>>,
+    matrix:create(28,28,float32,true,Data).
 
 label_to_vector(N) when is_integer(N), N>=0, N=< 9 ->
     matrix:from_list([[I] || 

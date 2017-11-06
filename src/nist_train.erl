@@ -14,45 +14,65 @@
 %%
 
 main() ->
-    main(30,[30]).
+    main( #{ epochs => 30,
+	     batch_size => 10,
+	     learning_rate => 3.0 }).
 
-main(Epochs,Hidden) ->
-    {TrainingSet0,ValidationSet} = load2(5000,100),
+main(Options) ->
+    main([30], Options).
+
+main(Hidden, Options) ->
+    {TrainingSet0,ValidationSet} = load(5000,100,
+					 fun nist:image_to_vector/1),
     io:format("loaded 5000+100\n"),
     Net = deep_net:new(784,Hidden,10),
     TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
-    deep_net:sgd(Net, TrainingSet, ValidationSet, Epochs, 10, 3.0).
+    deep_net:sgd(Net, TrainingSet, ValidationSet, Options).
 
 main1() ->
-    main1(30,[30]).
+    main1(#{epochs => 30,
+	    batch_size=>10,
+	    learning_rate=>3.0}).
 
-main1(Epochs,Hidden) ->
-    {TrainingSet0,ValidationSet} = load2(50000,10000),
+main1(Options) ->
+    main1([30],Options).
+
+main1(Hidden, Options) ->
+    {TrainingSet0,ValidationSet} = load(50000,10000,
+					fun nist:image_to_vector/1),
     io:format("loaded 50000+10000\n"),
     Net = deep_net:new(784,Hidden,10),
     TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
-    deep_net:sgd(Net, TrainingSet, ValidationSet, Epochs, 10, 3.0).
+    deep_net:sgd(Net, TrainingSet, ValidationSet, Options).
 
-load(N) ->
+load2d(N) ->
+    load(N, fun nist:image_to_matrix/1).
+
+loadv(N) ->
+    load(N, fun nist:image_to_vector/1).
+
+%% load one set of test data
+load(N,Transform) ->
     {ok,Fd1} = nist:open_image_file(),
     {ok,Fd2} = nist:open_label_file(),
-    R = load(Fd1,Fd2,N),
+    R = load_(Fd1,Fd2,N,Transform),
     nist:close_image_file(Fd1),
     nist:close_label_file(Fd2),
     R.
 
-load2(N,M) ->
+%% load two sets of test data
+load(N,M,Transform) ->
     {ok,Fd1} = nist:open_image_file(),
     {ok,Fd2} = nist:open_label_file(),
-    Rn = load(Fd1,Fd2,N),
-    Rm = load(Fd1,Fd2,M),
+    Rn = load_(Fd1,Fd2,N,Transform),
+    Rm = load_(Fd1,Fd2,M,Transform),
     nist:close_image_file(Fd1),
     nist:close_label_file(Fd2),
     {Rn,Rm}.
 
-load(_Fd1,_Fd2,0) ->
+load_(_Fd1,_Fd2,0,_Transform) ->
     [];
-load(Fd1,Fd2,I) ->
+load_(Fd1,Fd2,I,Transform) ->
     {ok,Img} = nist:read_next_image(Fd1),
     {ok,<<L>>} = nist:read_next_label(Fd2),
-    [{ nist:image_to_matrix(Img), L } | load(Fd1,Fd2,I-1)].
+    [{ Transform(Img), L } | load_(Fd1,Fd2,I-1,Transform)].
