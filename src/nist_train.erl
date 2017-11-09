@@ -19,29 +19,32 @@ main() ->
 	     learning_rate => 3.0 }).
 
 main(Options) ->
-    main([30], Options).
+    main([{sigmoid,30}], sigmoid, Options, 5000, 100).
 
-main(Hidden, Options) ->
-    {TrainingSet0,ValidationSet} = load(5000,100,
-					 fun nist:image_to_vector/1),
-    io:format("loaded 5000+100\n"),
-    Net = deep_net:new(784,Hidden,10),
-    TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
-    deep_net:sgd(Net, TrainingSet, ValidationSet, Options).
+main_relu() ->
+    main_relu( #{ epochs => 30,
+	     batch_size => 10,
+	     learning_rate => 3.0 }).
 
-main1() ->
-    main1(#{epochs => 30,
-	    batch_size=>10,
-	    learning_rate=>3.0}).
+main_relu(Options) ->
+    main([{relu,30}], relu, Options, 5000, 100).
 
-main1(Options) ->
-    main1([30],Options).
 
-main1(Hidden, Options) ->
-    {TrainingSet0,ValidationSet} = load(50000,10000,
+main_large() ->
+    main_large(#{epochs => 30,
+		 batch_size=>10,
+		 learning_rate=>3.0}).
+
+main_large(Options) ->
+    main([30], sigmoid, Options, 50000, 10000).
+
+%%
+
+main(Hidden, Otype, Options, NTrain, NValid) ->
+    {TrainingSet0,ValidationSet} = load(NTrain, NValid,
 					fun nist:image_to_vector/1),
-    io:format("loaded 50000+10000\n"),
-    Net = deep_net:new(784,Hidden,10),
+    io:format("loaded ~w+~w\n", [NTrain, NValid]),
+    Net = deep_net:new(784,Hidden,{Otype,10}),
     TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
     deep_net:sgd(Net, TrainingSet, ValidationSet, Options).
 
