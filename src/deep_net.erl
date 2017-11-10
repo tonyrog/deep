@@ -78,21 +78,23 @@ sgd(Net,TrainingSet,ValidationSet,InputOptions)
     Default = #{ eta => 3.0, 
 		 lmbda => 0.0,
 		 batch_size => 10,
-		 epochs => 20 },
+		 epochs => 20,
+		 k => 0 },
     Options = maps:merge(Default, InputOptions),
     Eta   = option(learning_rate, Options),
     Lmbda = option(regularization, Options),
     BatchSize = option(batch_size, Options),
     Epochs = option(epochs, Options),
+    K = option(k, Options),
     Tn = length(TrainingSet),
-    sgd_(Net,Tn,TrainingSet,ValidationSet,1,Epochs,BatchSize,Eta,Lmbda).
+    sgd_(Net,Tn,TrainingSet,ValidationSet,1,Epochs,BatchSize,Eta,Lmbda,K).
 
-sgd_(Net,_Tn,_TrainingSet,_ValidationSet,E,Epochs,_BatchSize,_Eta,_Lmbda)
+sgd_(Net,_Tn,_TrainingSet,_ValidationSet,E,Epochs,_BatchSize,_Eta,_Lmbda,_K)
   when E > Epochs -> Net;
-sgd_(Net,Tn,TrainingSet,ValidationSet,E,Epochs,BatchSize,Eta,Lmbda) ->
+sgd_(Net,Tn,TrainingSet,ValidationSet,E,Epochs,BatchSize,Eta,Lmbda,K) ->
     TrainingSet1 = deep_random:shuffle(TrainingSet),
     T0 = erlang:monotonic_time(),
-    Net1 = sgd__(Net,Tn,TrainingSet1,BatchSize,Eta,Lmbda),
+    Net1 = sgd__(Net,Tn,TrainingSet1,BatchSize,Eta,Lmbda,K),
     T1 = erlang:monotonic_time(),
     R = evaluate(Net1,ValidationSet),
     T2 = erlang:monotonic_time(),
@@ -101,18 +103,18 @@ sgd_(Net,Tn,TrainingSet,ValidationSet,E,Epochs,BatchSize,Eta,Lmbda) ->
     Time2 = erlang:convert_time_unit(T2 - T1, native, microsecond),
     io:format("epoch ~w/~w : learn=~.2f%, train=~.2fs, eval=~.2fs\n", 
 	      [E,Epochs,(R/M)*100,Time1/1000000,Time2/1000000]),
-    sgd_(Net1,Tn,TrainingSet,ValidationSet,E+1,Epochs,BatchSize,Eta,Lmbda).
+    sgd_(Net1,Tn,TrainingSet,ValidationSet,E+1,Epochs,BatchSize,Eta,Lmbda,K).
 
 %% loop over batches and train the net
-sgd__(Net, _Tn, [], _BatchSize, _Eta, _Lmbda) ->
+sgd__(Net, _Tn, [], _BatchSize, _Eta, _Lmbda, _K) ->
     Net;
-sgd__(Net, Tn, TrainingSet, BatchSize, Eta, Lmbda) ->
+sgd__(Net, Tn, TrainingSet, BatchSize, Eta, Lmbda, K) ->
     Batch = lists:sublist(TrainingSet, BatchSize),
     Bn = length(Batch),
-    Net1 = learn1(Net, Batch, Eta, Bn, Lmbda, Tn),
+    Net1 = learn1(Net, Batch, Eta, Bn, Lmbda, Tn, K),
     %% Net1 = learn(Net, Batch, Eta, Bn, Lmbda, Tn),
     TrainingSet1 = lists:nthtail(Bn, TrainingSet),
-    sgd__(Net1, Tn, TrainingSet1, BatchSize, Eta, Lmbda).
+    sgd__(Net1, Tn, TrainingSet1, BatchSize, Eta, Lmbda, K).
 
 %%
 %% Run learning over a batch of {X,Y} pairs
@@ -172,32 +174,36 @@ backward_pass_([],_,_,_,Nw,Nb) ->
 %% weights are updated on recursive return
 %% (batch is not really used in this case)
 %%
-learn1(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn) ->
-    {_, Net1} = learn1_(1, Net, X, Y, Eta, Lmbda),
-    learn1(Net1, Batch, Eta, Bn, Lmbda, Tn);
-learn1(Net, [], _Eta, _Bb, _Lmbda, _Tn) ->
+learn1(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn, K) ->
+    {_, Net1} = learn1_(1, Net, X, Y, Eta, Lmbda, K),
+    learn1(Net1, Batch, Eta, Bn, Lmbda, Tn, K);
+learn1(Net, [], _Eta, _Bb, _Lmbda, _Tn, _K) ->
     Net.
     
-learn1_(I,[L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}], 
-	A, Y, Eta, Lmbda) ->
+learn1_(_I,[L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}],
+	A, Y, Eta, Lmbda, K) ->
     Z = matrix:add(matrix:multiply(W, A), B),
     Out = F(Z),
-    Delta = matrix:times(cost_derivative(Out, Y), G(Z)),
-    W1 = matrix:multiply(Delta,matrix:transpose(A)),
+    Grad = G(Z),
+    Ki = matrix:topk(Grad,K),
+    Delta = matrix:ktimes(Ki,cost_derivative(Out, Y), Grad),
+    W1 = matrix:kmultiply(Ki,Delta,matrix:transpose(A)),
     NW1 = matrix:subtract(matrix:scale((1-Eta*Lmbda),W),matrix:scale(Eta,W1)),
     NB1 = matrix:subtract(B, matrix:scale(Eta, Delta)),
     {Delta,[L#layer{weights=NW1,bias=NB1}]};
 learn1_(I, [L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}|
 	    Net=[#layer{weights=Wn}|_]],
-	A, Y, Eta, Lmbda) ->
+	A, Y, Eta, Lmbda,K) ->
     Z = matrix:add(matrix:multiply(W,A),B),
     A1 = F(Z),
-    {Delta0,Net1} = learn1_(I+1,Net,A1,Y,Eta,Lmbda),
+    {Delta0,Net1} = learn1_(I+1,Net,A1,Y,Eta,Lmbda,K),
     DeltaC = matrix:transpose(matrix:transpose_data(Delta0)),
     Wt = matrix:transpose(Wn), %% Note Wn!!!
     WtD = matrix:multiply(Wt,DeltaC),
-    Delta = matrix:times(WtD, G(Z)),
-    W1 = matrix:multiply(Delta,matrix:transpose(A)),
+    Grad = G(Z),
+    Ki = matrix:topk(Grad,K),
+    Delta = matrix:ktimes(Ki,WtD, Grad),
+    W1 = matrix:kmultiply(Ki,Delta,matrix:transpose(A)),
     NW1 = matrix:subtract(matrix:scale((1-Eta*Lmbda),W),matrix:scale(Eta,W1)),
     NB1 = matrix:subtract(B, matrix:scale(Eta, Delta)),
     {Delta,[L#layer{weights=NW1,bias=NB1}|Net1]}.
@@ -245,6 +251,7 @@ option(Key, Options, Default) ->
 option_(Key, Options, Default) ->
     validate(Key, maps:get(Key, Options, Default)).
 
+validate(k, Value) when is_integer(Value), Value >= 0 -> Value;
 validate(eta, Value) when is_number(Value), Value >= 0 -> Value;
 validate(learning_rate, Value) when is_number(Value), Value >= 0 -> Value;
 validate(lmbda, Value) when is_number(Value), Value >= 0 -> Value;
