@@ -22,8 +22,10 @@
 	  weights :: matrix:matrix(),   %% weight matrix
 	  bias    :: matrix:matrix(),   %% bias vector
 	  locked = false :: boolean(),  %% update weights?
-	  activation_fn :: fun((matrix:matrix()) -> matrix:matrix()),
-	  gradient_fn :: fun((matrix:matrix()) -> matrix:matrix())
+	  activation_fn :: fun((I::matrix:matrix()) -> 
+				      matrix:matrix()),
+	  gradient_fn :: fun((I::matrix:matrix(),O::matrix:matrix()) -> 
+				    matrix:matrix())
 	}).
 
 %% create a network with an input vector of size Ni 
@@ -111,26 +113,47 @@ sgd__(Net, _Tn, [], _BatchSize, _Eta, _Lmbda, _K) ->
 sgd__(Net, Tn, TrainingSet, BatchSize, Eta, Lmbda, K) ->
     Batch = lists:sublist(TrainingSet, BatchSize),
     Bn = length(Batch),
-    Net1 = learn1(Net, Batch, Eta, Bn, Lmbda, Tn, K),
-    %% Net1 = learn(Net, Batch, Eta, Bn, Lmbda, Tn),
+    %% Net1 = learn1(Net, Batch, Eta, Bn, Lmbda, Tn, K),
+    Net1 = plearn(Net, Batch, Eta, Bn, Lmbda, Tn, K),
     TrainingSet1 = lists:nthtail(Bn, TrainingSet),
     sgd__(Net1, Tn, TrainingSet1, BatchSize, Eta, Lmbda, K).
+%%
+%% parallel learn
+%%
+plearn(Net, Batch, Eta, Bn, Lmbda, Tn, K) ->
+    WsBs = parlists:map(
+	     fun({X,Y}) ->
+		     backprop(Net, X, Y, K)
+	     end, Batch),
+    {Ws,Bs} = sum_delta(WsBs),
+    learn_net(Net, Ws, Bs, Eta, Bn, Lmbda, Tn).
+
+sum_delta([{Ws,Bs}|WsBs]) ->
+    sum_delta(WsBs, Ws, Bs).
+
+sum_delta([{Ws,Bs}|WsBs], Ws0, Bs0) ->
+    Ws1 = lists:zipwith(fun matrix:add/2, Ws, Ws0),
+    Bs1 = lists:zipwith(fun matrix:add/2, Bs, Bs0),
+    sum_delta(WsBs, Ws1, Bs1);
+sum_delta([], Ws, Bs) ->
+    {Ws,Bs}.
 
 %%
 %% Run learning over a batch of {X,Y} pairs
 %% That mean update the weights after each batch number of
 %% paris
+%% FIXME: run thin in parallell over batch!
 %%
-learn(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn) ->
-    {Ws,Bs} = backprop(Net, X, Y),
-    learn(Net, Batch, Eta, Bn, Lmbda, Tn, Ws, Bs).
+learn(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn, K) ->
+    {Ws,Bs} = backprop(Net, X, Y, K),
+    learn(Net, Batch, Eta, Bn, Lmbda, Tn, Ws, Bs, K).
 
-learn(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn, Ws, Bs) ->
-    {WsB,BsB} = backprop(Net, X, Y),
+learn(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn, Ws, Bs, K) ->
+    {WsB,BsB} = backprop(Net, X, Y, K),
     Ws1 = lists:zipwith(fun matrix:add/2, Ws, WsB),
     Bs1 = lists:zipwith(fun matrix:add/2, Bs, BsB),
-    learn(Net, Batch, Eta, Bn, Lmbda, Tn, Ws1, Bs1);
-learn(Net, [], Eta, Bn, Lmbda, Tn, Ws, Bs) ->
+    learn(Net, Batch, Eta, Bn, Lmbda, Tn, Ws1, Bs1, K);
+learn(Net, [], Eta, Bn, Lmbda, Tn, Ws, Bs, _K) ->
     learn_net(Net, Ws, Bs, Eta, Bn, Lmbda, Tn).
 
 %% Bn = mini batch size
@@ -149,24 +172,26 @@ learn_net([], [], [], _Eta, _Bn, _Lmbda, _Tn) ->
 %% back propagation algorithm,
 %% adjust weights and biases to match output Y on input X
 %%
-backprop(Net=[#layer{gradient_fn=G}|Net1], X, Y) ->
-    {[Out,A|As],[Z|Zs]} = feed_forward_(Net, X, [X], []),
-    Delta = matrix:times(cost_derivative(Out, Y), G(Z)),
-    %% select ktop from cost_derivative => Delta
-    W1 = matrix:multiply(Delta,matrix:transpose(A)),
+backprop(Net=[#layer{gradient_fn=G}|Net1], X, Y, K) ->
+    {[Out|As=[A0|_]],[Z|Zs]} = feed_forward_(Net, X, [X], []),
+    Grad = G(Z,Out),
+    Ki = matrix:topk(Grad,K),
+    Delta = matrix:ktimes(cost_derivative(Out, Y), Grad, Ki),
+    W1 = matrix:kmultiply(Delta,matrix:transpose(A0),Ki),
     NetR = lists:reverse(Net1),
-    backward_pass_(NetR,Delta,As,Zs,[W1],[Delta]).
+    backward_pass_(NetR,Delta,As,Zs,[W1],[Delta],K).
 
 backward_pass_([#layer{weights=W,bias=_B,gradient_fn=G}|Net],
-	       Delta0,[A|As],[Z|Zs],Nw,Nb) ->
-    %% Transform Delta into column order (for speed)
-    DeltaC   = matrix:transpose(matrix:transpose_data(Delta0)),
-    Wt = matrix:transpose(W),
-    WtD  = matrix:multiply(Wt, DeltaC),
-    Delta = matrix:times(WtD, G(Z)),
-    W1 = matrix:multiply(Delta,matrix:transpose(A)),
-    backward_pass_(Net,Delta,As,Zs,[W1|Nw],[Delta|Nb]);
-backward_pass_([],_,_,_,Nw,Nb) ->
+	       Delta0,[Out|As=[A0|_]],[Z|Zs],Nw,Nb,K) ->
+    Grad = G(Z,Out),
+    Ki     = matrix:topk(Grad,K),
+    DeltaC = matrix:transpose(matrix:transpose_data(Delta0)), %% column order
+    Wt     = matrix:transpose(W),
+    WtD    = matrix:kmultiply(Wt, DeltaC, Ki),
+    Delta  = matrix:ktimes(WtD, Grad, Ki),
+    W1     = matrix:kmultiply(Delta,matrix:transpose(A0),Ki),
+    backward_pass_(Net,Delta,As,Zs,[W1|Nw],[Delta|Nb],K);
+backward_pass_([],_,_,_,Nw,Nb,_) ->
     {Nw,Nb}.
 
 %%
@@ -184,10 +209,10 @@ learn1_(_I,[L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}],
 	A, Y, Eta, Lmbda, K) ->
     Z = matrix:add(matrix:multiply(W, A), B),
     Out = F(Z),
-    Grad = G(Z),
+    Grad = G(Z,Out),
     Ki = matrix:topk(Grad,K),
-    Delta = matrix:ktimes(Ki,cost_derivative(Out, Y), Grad),
-    W1 = matrix:kmultiply(Ki,Delta,matrix:transpose(A)),
+    Delta = matrix:ktimes(cost_derivative(Out, Y), Grad, Ki),
+    W1 = matrix:kmultiply(Delta,matrix:transpose(A),Ki),
     NW1 = matrix:subtract(matrix:scale((1-Eta*Lmbda),W),matrix:scale(Eta,W1)),
     NB1 = matrix:subtract(B, matrix:scale(Eta, Delta)),
     {Delta,[L#layer{weights=NW1,bias=NB1}]};
@@ -195,20 +220,20 @@ learn1_(I, [L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}|
 	    Net=[#layer{weights=Wn}|_]],
 	A, Y, Eta, Lmbda,K) ->
     Z = matrix:add(matrix:multiply(W,A),B),
-    A1 = F(Z),
-    {Delta0,Net1} = learn1_(I+1,Net,A1,Y,Eta,Lmbda,K),
+    Out = F(Z),
+    {Delta0,Net1} = learn1_(I+1,Net,Out,Y,Eta,Lmbda,K),
+    Grad = G(Z,Out),
+    Ki = matrix:topk(Grad,K),
     DeltaC = matrix:transpose(matrix:transpose_data(Delta0)),
     Wt = matrix:transpose(Wn), %% Note Wn!!!
-    WtD = matrix:multiply(Wt,DeltaC),
-    Grad = G(Z),
-    Ki = matrix:topk(Grad,K),
-    Delta = matrix:ktimes(Ki,WtD, Grad),
-    W1 = matrix:kmultiply(Ki,Delta,matrix:transpose(A)),
+    WtD = matrix:kmultiply(Wt, DeltaC, Ki),
+    Delta = matrix:ktimes(WtD, Grad, Ki),
+    W1 = matrix:kmultiply(Delta,matrix:transpose(A),Ki),
     NW1 = matrix:subtract(matrix:scale((1-Eta*Lmbda),W),matrix:scale(Eta,W1)),
     NB1 = matrix:subtract(B, matrix:scale(Eta, Delta)),
     {Delta,[L#layer{weights=NW1,bias=NB1}|Net1]}.
 
-
+%% more cost functions
 cost_derivative(A, Y) ->
     matrix:subtract(A, Y).
 
@@ -266,10 +291,10 @@ activation_function(leaky_relu) -> fun matrix:leaky_relu/1;
 activation_function(linear) -> fun matrix:linear/1;
 activation_function(softplus) -> fun matrix:softplus/1.
 
-gradient_function(sigmoid) -> fun matrix:sigmoid_prime/1;
-gradient_function(tanh) ->  fun matrix:tanh_prime/1;
-gradient_function(relu) -> fun matrix:relu_prime/1;
-gradient_function(leaky_relu) -> fun matrix:leaky_relu_prime/1;
-gradient_function(linear) -> fun matrix:linear_prime/1;
-gradient_function(softplus) -> fun matrix:softplus_prime/1.
+gradient_function(sigmoid) -> fun matrix:sigmoid_prime/2;
+gradient_function(tanh) ->  fun matrix:tanh_prime/2;
+gradient_function(relu) -> fun matrix:relu_prime/2;
+gradient_function(leaky_relu) -> fun matrix:leaky_relu_prime/2;
+gradient_function(linear) -> fun matrix:linear_prime/2;
+gradient_function(softplus) -> fun matrix:softplus_prime/2.
     

@@ -14,7 +14,7 @@
 %%
 
 main() ->
-    main( #{ epochs => 30,
+    main( #{ epochs => 20,
 	     batch_size => 10,
 	     learning_rate => 3.0 }).
 
@@ -22,12 +22,12 @@ main(Options) ->
     main([{sigmoid,30}], sigmoid, Options, 5000, 100).
 
 main_relu() ->
-    main_relu( #{ epochs => 30,
-	     batch_size => 10,
-	     learning_rate => 3.0 }).
+    main_relu( #{ epochs => 20,
+		  batch_size => 10,
+		  learning_rate => 3.0 }).
 
 main_relu(Options) ->
-    main([{relu,30}], relu, Options, 5000, 100).
+    main([{relu,30}], sigmoid, Options, 5000, 100).
 
 
 main_large() ->
@@ -36,7 +36,7 @@ main_large() ->
 		 learning_rate=>3.0}).
 
 main_large(Options) ->
-    main([30], sigmoid, Options, 50000, 10000).
+    main([{sigmoid,30}], sigmoid, Options, 50000, 10000).
 
 %%
 
