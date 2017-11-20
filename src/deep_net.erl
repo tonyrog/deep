@@ -177,8 +177,7 @@ update_net([], [], [], _Eta, _Bn, _Lmbda, _Tn) ->
     [].
 
 %%
-%% back propagation algorithm,
-%% adjust weights and biases to match output Y on input X
+%% back propagation algorithm
 %%
 backprop(Net=[#layer{gradient_fn=G}|Net1], X, Y, K) ->
     {[Out|As=[A0|_]],[Z|Zs]} = feed_forward_(Net, X, [X], []),
@@ -206,18 +205,22 @@ backward_pass_([],_,_,_,Nw,Nb,_) ->
 %% variant of learn
 %%
 learn1(Net, [{X,Y}|Batch], K) ->
-    {Ws, Bs} = learn1_(Net, X, Y, K),
+    {Ws, Bs} = backprop1(Net, X, Y, K),
     learn1(Net, Batch, Ws, Bs, K).
 
 learn1(Net, [{X,Y}|Batch], Ws0, Bs0, K) ->
-    {Ws, Bs} = learn1_(Net, X, Y, K),
+    {Ws, Bs} = backprop1(Net, X, Y, K),
     Ws1 = lists:zipwith(fun matrix:add/2, Ws, Ws0),
     Bs1 = lists:zipwith(fun matrix:add/2, Bs, Bs0),
     learn1(Net, Batch, Ws1, Bs1, K);
 learn1(_Net, [], Ws, Bs, _K) ->
     {Ws,Bs}.
     
-learn1_([#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}], A, Y, K) ->
+%%
+%% backprop with forward pass on way down and
+%% backward pass on the way up.
+%%
+backprop1([#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}], A, Y, K) ->
     %% output layer
     Z = matrix:add(matrix:multiply(W, A), B),
     Out = F(Z),
@@ -226,12 +229,12 @@ learn1_([#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}], A, Y, K) ->
     Delta = matrix:ktimes(cost_derivative(Out, Y), Grad, Ki),
     W1 = matrix:kmultiply(Delta,matrix:transpose(A),Ki),
     {[W1],[Delta]};
-learn1_([#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}|
+backprop1([#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}|
 	 Net=[#layer{weights=Wn}|_]], A, Y, K) ->
     %% hidden layer
     Z = matrix:add(matrix:multiply(W,A),B),
-    Out = F(Z),
-    {Ws,Bs=[Delta0|_]} = learn1_(Net,Out,Y,K),
+    Out = F(Z),  %% apply activation function
+    {Ws,Bs=[Delta0|_]} = backprop1(Net,Out,Y,K),
     Grad = G(Z,Out),
     Ki = matrix:topk(Grad,K),
     DeltaC = matrix:transpose(matrix:transpose_data(Delta0)),

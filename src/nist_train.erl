@@ -18,7 +18,7 @@ main() ->
 	     learning_rate => 3.0 }).
 
 main(Options) ->
-    main([{sigmoid,30}], sigmoid, Options, 5000, 100).
+    main([{sigmoid,30}], sigmoid, Options, 10000, 1000).
 
 main_relu() ->
     main_relu( #{ epochs => 20,
@@ -26,7 +26,7 @@ main_relu() ->
 		  learning_rate => 3.0 }).
 
 main_relu(Options) ->
-    main([{relu,30}], sigmoid, Options, 5000, 100).
+    main([{relu,30}], sigmoid, Options, 10000, 1000).
 
 
 main_large() ->
