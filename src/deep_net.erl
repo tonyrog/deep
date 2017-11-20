@@ -22,6 +22,7 @@
 	  weights :: matrix:matrix(),   %% weight matrix
 	  bias    :: matrix:matrix(),   %% bias vector
 	  locked = false :: boolean(),  %% update weights?
+	  activation :: atom(),         %% name of activation function
 	  activation_fn :: fun((I::matrix:matrix()) -> 
 				      matrix:matrix()),
 	  gradient_fn :: fun((I::matrix:matrix(),O::matrix:matrix()) -> 
@@ -54,6 +55,7 @@ create__(IN,[OUTL|Hs]) ->
 		 outputs = OUT,
 		 weights = W,
 		 bias = B,
+		 activation = Activation,
 		 activation_fn = F,
 		 gradient_fn = G
 	       },
@@ -81,22 +83,25 @@ sgd(Net,TrainingSet,ValidationSet,InputOptions)
 		 lmbda => 0.0,
 		 batch_size => 10,
 		 epochs => 20,
-		 k => 0 },
+		 k => 0,
+		 learn => learn  %% with batch
+	       },
     Options = maps:merge(Default, InputOptions),
     Eta   = option(learning_rate, Options),
     Lmbda = option(regularization, Options),
     BatchSize = option(batch_size, Options),
     Epochs = option(epochs, Options),
     K = option(k, Options),
+    L = option(learn, Options),
     Tn = length(TrainingSet),
-    sgd_(Net,Tn,TrainingSet,ValidationSet,1,Epochs,BatchSize,Eta,Lmbda,K).
+    sgd_(Net,L,Tn,TrainingSet,ValidationSet,1,Epochs,BatchSize,Eta,Lmbda,K).
 
-sgd_(Net,_Tn,_TrainingSet,_ValidationSet,E,Epochs,_BatchSize,_Eta,_Lmbda,_K)
+sgd_(Net,_L,_Tn,_TrainingSet,_ValidationSet,E,Epochs,_BatchSize,_Eta,_Lmbda,_K)
   when E > Epochs -> Net;
-sgd_(Net,Tn,TrainingSet,ValidationSet,E,Epochs,BatchSize,Eta,Lmbda,K) ->
+sgd_(Net,L,Tn,TrainingSet,ValidationSet,E,Epochs,BatchSize,Eta,Lmbda,K) ->
     TrainingSet1 = deep_random:shuffle(TrainingSet),
     T0 = erlang:monotonic_time(),
-    Net1 = sgd__(Net,Tn,TrainingSet1,BatchSize,Eta,Lmbda,K),
+    Net1 = sgd__(Net,L,Tn,TrainingSet1,BatchSize,Eta,Lmbda,K),
     T1 = erlang:monotonic_time(),
     R = evaluate(Net1,ValidationSet),
     T2 = erlang:monotonic_time(),
@@ -105,28 +110,33 @@ sgd_(Net,Tn,TrainingSet,ValidationSet,E,Epochs,BatchSize,Eta,Lmbda,K) ->
     Time2 = erlang:convert_time_unit(T2 - T1, native, microsecond),
     io:format("epoch ~w/~w : learn=~.2f%, train=~.2fs, eval=~.2fs\n", 
 	      [E,Epochs,(R/M)*100,Time1/1000000,Time2/1000000]),
-    sgd_(Net1,Tn,TrainingSet,ValidationSet,E+1,Epochs,BatchSize,Eta,Lmbda,K).
+    sgd_(Net1,L,Tn,TrainingSet,ValidationSet,E+1,Epochs,BatchSize,Eta,Lmbda,K).
 
 %% loop over batches and train the net
-sgd__(Net, _Tn, [], _BatchSize, _Eta, _Lmbda, _K) ->
+sgd__(Net,_L, _Tn, [], _BatchSize, _Eta, _Lmbda, _K) ->
     Net;
-sgd__(Net, Tn, TrainingSet, BatchSize, Eta, Lmbda, K) ->
+sgd__(Net, L, Tn,TrainingSet, BatchSize, Eta, Lmbda, K) ->
     Batch = lists:sublist(TrainingSet, BatchSize),
     Bn = length(Batch),
-    %% Net1 = learn1(Net, Batch, Eta, Bn, Lmbda, Tn, K),
-    Net1 = plearn(Net, Batch, Eta, Bn, Lmbda, Tn, K),
+    {Ws,Bs} = case L of 
+		  learn -> learn(Net, Batch, K);
+		  learn1 -> learn1(Net, Batch, K);
+		  plearn -> plearn(Net, Batch, K)
+	      end,
+    Net1 = update_net(Net, Ws, Bs, Eta, Bn, Lmbda, Tn),
     TrainingSet1 = lists:nthtail(Bn, TrainingSet),
-    sgd__(Net1, Tn, TrainingSet1, BatchSize, Eta, Lmbda, K).
+    sgd__(Net1, L, Tn, TrainingSet1, BatchSize, Eta, Lmbda, K).
+
+
 %%
 %% parallel learn
 %%
-plearn(Net, Batch, Eta, Bn, Lmbda, Tn, K) ->
+plearn(Net, Batch, K) ->
     WsBs = parlists:map(
 	     fun({X,Y}) ->
 		     backprop(Net, X, Y, K)
 	     end, Batch),
-    {Ws,Bs} = sum_delta(WsBs),
-    learn_net(Net, Ws, Bs, Eta, Bn, Lmbda, Tn).
+    sum_delta(WsBs).
 
 sum_delta([{Ws,Bs}|WsBs]) ->
     sum_delta(WsBs, Ws, Bs).
@@ -140,32 +150,30 @@ sum_delta([], Ws, Bs) ->
 
 %%
 %% Run learning over a batch of {X,Y} pairs
-%% That mean update the weights after each batch number of
-%% paris
-%% FIXME: run thin in parallell over batch!
+%% This mean update the weights after each batch
 %%
-learn(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn, K) ->
+learn(Net, [{X,Y}|Batch], K) ->
     {Ws,Bs} = backprop(Net, X, Y, K),
-    learn(Net, Batch, Eta, Bn, Lmbda, Tn, Ws, Bs, K).
+    learn(Net, Batch, Ws, Bs, K).
 
-learn(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn, Ws, Bs, K) ->
+learn(Net, [{X,Y}|Batch], Ws, Bs, K) ->
     {WsB,BsB} = backprop(Net, X, Y, K),
     Ws1 = lists:zipwith(fun matrix:add/2, Ws, WsB),
     Bs1 = lists:zipwith(fun matrix:add/2, Bs, BsB),
-    learn(Net, Batch, Eta, Bn, Lmbda, Tn, Ws1, Bs1, K);
-learn(Net, [], Eta, Bn, Lmbda, Tn, Ws, Bs, _K) ->
-    learn_net(Net, Ws, Bs, Eta, Bn, Lmbda, Tn).
+    learn(Net, Batch, Ws1, Bs1, K);
+learn(_Net, [], Ws, Bs, _K) ->
+    {Ws, Bs}.
 
 %% Bn = mini batch size
 %% Tn = training set size
-learn_net([L=#layer{locked=true}|Net],[_NW|Ws],[_NB|Bs],Eta,Bn,Lmbda,Tn) ->
-    [L | learn_net(Net, Ws, Bs, Eta, Bn, Lmbda, Tn)];
-learn_net([L=#layer{weights=W,bias=B}|Net],[NW|Ws],[NB|Bs],Eta,Bn,Lmbda,Tn) ->
+update_net([L=#layer{locked=true}|Net],[_NW|Ws],[_NB|Bs],Eta,Bn,Lmbda,Tn) ->
+    [L | update_net(Net, Ws, Bs, Eta, Bn, Lmbda, Tn)];
+update_net([L=#layer{weights=W,bias=B}|Net],[NW|Ws],[NB|Bs],Eta,Bn,Lmbda,Tn) ->
     W1 = matrix:subtract(matrix:scale((1-Eta*Lmbda/Tn),W),
 			 matrix:scale(Eta/Bn,NW)),
     B1 = matrix:subtract(B, matrix:scale(Eta/Bn, NB)),
-    [L#layer{weights=W1,bias=B1} | learn_net(Net,Ws,Bs,Eta,Bn,Lmbda,Tn)];
-learn_net([], [], [], _Eta, _Bn, _Lmbda, _Tn) ->
+    [L#layer{weights=W1,bias=B1} | update_net(Net,Ws,Bs,Eta,Bn,Lmbda,Tn)];
+update_net([], [], [], _Eta, _Bn, _Lmbda, _Tn) ->
     [].
 
 %%
@@ -195,33 +203,35 @@ backward_pass_([],_,_,_,Nw,Nb,_) ->
     {Nw,Nb}.
 
 %%
-%% learn1 is feed and backprop in one go.
-%% weights are updated on recursive return
-%% (batch is not really used in this case)
+%% variant of learn
 %%
-learn1(Net, [{X,Y}|Batch], Eta, Bn, Lmbda, Tn, K) ->
-    {_, Net1} = learn1_(1, Net, X, Y, Eta, Lmbda, K),
-    learn1(Net1, Batch, Eta, Bn, Lmbda, Tn, K);
-learn1(Net, [], _Eta, _Bb, _Lmbda, _Tn, _K) ->
-    Net.
+learn1(Net, [{X,Y}|Batch], K) ->
+    {Ws, Bs} = learn1_(Net, X, Y, K),
+    learn1(Net, Batch, Ws, Bs, K).
+
+learn1(Net, [{X,Y}|Batch], Ws0, Bs0, K) ->
+    {Ws, Bs} = learn1_(Net, X, Y, K),
+    Ws1 = lists:zipwith(fun matrix:add/2, Ws, Ws0),
+    Bs1 = lists:zipwith(fun matrix:add/2, Bs, Bs0),
+    learn1(Net, Batch, Ws1, Bs1, K);
+learn1(_Net, [], Ws, Bs, _K) ->
+    {Ws,Bs}.
     
-learn1_(_I,[L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}],
-	A, Y, Eta, Lmbda, K) ->
+learn1_([#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}], A, Y, K) ->
+    %% output layer
     Z = matrix:add(matrix:multiply(W, A), B),
     Out = F(Z),
     Grad = G(Z,Out),
     Ki = matrix:topk(Grad,K),
     Delta = matrix:ktimes(cost_derivative(Out, Y), Grad, Ki),
     W1 = matrix:kmultiply(Delta,matrix:transpose(A),Ki),
-    NW1 = matrix:subtract(matrix:scale((1-Eta*Lmbda),W),matrix:scale(Eta,W1)),
-    NB1 = matrix:subtract(B, matrix:scale(Eta, Delta)),
-    {Delta,[L#layer{weights=NW1,bias=NB1}]};
-learn1_(I, [L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}|
-	    Net=[#layer{weights=Wn}|_]],
-	A, Y, Eta, Lmbda,K) ->
+    {[W1],[Delta]};
+learn1_([#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}|
+	 Net=[#layer{weights=Wn}|_]], A, Y, K) ->
+    %% hidden layer
     Z = matrix:add(matrix:multiply(W,A),B),
     Out = F(Z),
-    {Delta0,Net1} = learn1_(I+1,Net,Out,Y,Eta,Lmbda,K),
+    {Ws,Bs=[Delta0|_]} = learn1_(Net,Out,Y,K),
     Grad = G(Z,Out),
     Ki = matrix:topk(Grad,K),
     DeltaC = matrix:transpose(matrix:transpose_data(Delta0)),
@@ -229,9 +239,7 @@ learn1_(I, [L=#layer{weights=W,bias=B,activation_fn=F,gradient_fn=G}|
     WtD = matrix:kmultiply(Wt, DeltaC, Ki),
     Delta = matrix:ktimes(WtD, Grad, Ki),
     W1 = matrix:kmultiply(Delta,matrix:transpose(A),Ki),
-    NW1 = matrix:subtract(matrix:scale((1-Eta*Lmbda),W),matrix:scale(Eta,W1)),
-    NB1 = matrix:subtract(B, matrix:scale(Eta, Delta)),
-    {Delta,[L#layer{weights=NW1,bias=NB1}|Net1]}.
+    {[W1|Ws],[Delta|Bs]}.
 
 %% more cost functions
 cost_derivative(A, Y) ->
@@ -282,7 +290,10 @@ validate(learning_rate, Value) when is_number(Value), Value >= 0 -> Value;
 validate(lmbda, Value) when is_number(Value), Value >= 0 -> Value;
 validate(regularization, Value) when is_number(Value), Value >= 0 -> Value;
 validate(epochs, Value) when is_integer(Value), Value >= 0 -> Value;
-validate(batch_size, Value) when is_integer(Value), Value >= 0 -> Value.
+validate(batch_size, Value) when is_integer(Value), Value >= 0 -> Value;
+validate(learn, learn) -> learn;
+validate(learn, learn1) -> learn1;
+validate(learn, plearn) -> plearn.
 
 activation_function(sigmoid) -> fun matrix:sigmoid/1;
 activation_function(tanh) ->  fun matrix:tanh/1;
@@ -298,3 +309,29 @@ gradient_function(leaky_relu) -> fun matrix:leaky_relu_prime/2;
 gradient_function(linear) -> fun matrix:linear_prime/2;
 gradient_function(softplus) -> fun matrix:softplus_prime/2.
     
+%% dump network to terminal for inspection
+dump(Net) ->
+    dump(1, Net).
+    
+dump(I,[L=#layer { inputs=N, outputs=M, activation=A } | Ls]) ->
+    if I =:= 1 ->
+	    io:format("input ~s layer ~wx~w\n", [A, N, M]);
+       Ls =:= [] ->
+	    io:format("output ~s layer ~wx~w\n", [A, N, M]);
+       true ->
+	    io:format("hidden ~s layer ~wx~w\n", [A, N, M])
+    end,
+    io:format(" WEIGHTS\n"),
+    matrix:print(L#layer.weights),
+    io:format(" BIAS\n"),
+    matrix:print(L#layer.bias),
+    dump(I+1,Ls);
+dump(_, []) ->
+    ok.
+
+
+
+    
+    
+    
+
