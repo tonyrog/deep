@@ -14,9 +14,12 @@
 %%
 
 main() ->
+    main(32).
+
+main(K) ->
     {TrainingSet0,ValidationSet} = load2(5000,100),
     io:format("loaded\n"),
-    Net = deep_net:new(784, [32,32], 10),
+    Net = deep_net:new(784, [K,K], 10),
     TrainingSet = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- TrainingSet0],
     deep_net:sgd(Net, TrainingSet, ValidationSet, 20, 10, 0.9).
 

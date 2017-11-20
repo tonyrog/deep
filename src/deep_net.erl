@@ -32,7 +32,7 @@ create__(_Nh,[]) ->
     [].
 
 %%
-%% Feed forward 
+%% Feed forward:
 %%
 feed(Net,IN) ->
     feed_(Net,IN).
