@@ -23,6 +23,9 @@
 -export([image_to_matrix/1]).
 -export([label_to_vector/1]).
 -export([label_to_matrix/1]).
+-export([mix_images/2]).
+
+-export([show_image/1]).
 
 -record(nist_image_file,
 	{
@@ -68,9 +71,20 @@ read_image(F, I) when I >= 0 ->
     file:position(F#nist_image_file.fd, Pos),
     file:read(F#nist_image_file.fd, N).
 
+mix_images(A, B) when is_binary(A), is_binary(B) ->
+    I = max(0, min(byte_size(A), byte_size(B))-1),
+    mix_images_(A,B,I,[]).
+
+mix_images_(A,B,I,Acc) ->
+    if I < 0 ->
+	    list_to_binary(Acc);
+       true ->
+	    mix_images_(A,B,I-1,[min(255,binary:at(A,I)+binary:at(B,I)) | Acc])
+    end.
+
 %% image as vector (coded as matrix  1x28 )
 %% generate a column major column vector,
-%% transpose will onlu change from row-major to column-major
+%% transpose will only change from row-major to column-major
 %% order.
 image_to_vector(Bin) when is_binary(Bin) ->
     matrix:transpose(matrix:from_list([[X/255 || <<X>> <= Bin ]],float32)).
@@ -88,7 +102,6 @@ label_to_vector(N) when is_integer(N), N>=0, N=< 9 ->
 
 label_to_matrix(N) ->
     label_to_vector(N).
-
 
 %% read input data vector normalize in [0, 1]
 read_image_vector(F, I) ->
@@ -115,7 +128,6 @@ open_label_file(File) ->
 close_label_file(#nist_label_file { fd=Fd }) ->
     file:close(Fd).
 
-
 read_next_label(F) ->
     file:read(F#nist_label_file.fd, 1).
 
@@ -137,3 +149,14 @@ read_label_vector(F, I) ->
 	{ok,N} -> {ok, label_to_vector(N)};
 	Error -> Error
     end.
+
+%% show ascii(-art) 28x28 image
+show_image(Bin) ->
+    io:put_chars(ascii_image(Bin)).
+
+ascii_image(Bin) ->
+    [ [[ map_level(P) || <<P>> <= R],"\n"] ||  <<R:28/binary>> <= Bin ].
+
+%% char map = [0=$\s, 1=$., 2=$/, 3=$#]
+map_level(L) ->
+    element((L bsr 6)+1, {$\s,$.,$/,$#}).
