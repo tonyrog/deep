@@ -8,17 +8,23 @@
 -module(nist).
 
 -export([open_image_file/0, open_image_file/1]).
+-export([info_image_keys/0]).
+-export([info_image_file/1, info_image_file/2]).
 -export([close_image_file/1]).
 -export([read_next_image/1]).
 -export([read_image/2]).
 -export([read_image_vector/2]).
 
 -export([open_label_file/0, open_label_file/1]).
+-export([info_label_keys/0]).
+-export([info_label_file/1, info_label_file/2]).
 -export([close_label_file/1]).
 -export([read_next_label/1]).
 -export([read_label/2]).
 -export([read_label_number/2]).
--export([read_label_vector/2]).
+-export([read_label_vector/2])
+
+.
 -export([image_to_vector/1]).
 -export([image_to_matrix/1]).
 -export([label_to_vector/1]).
@@ -29,17 +35,21 @@
 
 -record(nist_image_file,
 	{
-	  fd,
-	  n,
-	  rows,
-	  columns
+	 fd,
+	 n,
+	 rows,
+	 columns,
+	 format
 	}).
 
 
 -record(nist_label_file,
 	{
-	  fd,
-	  n
+	 fd,
+	 n,
+	 min,
+	 max,
+	 format
 	}).
 
 open_image_file() ->
@@ -50,12 +60,27 @@ open_image_file(File) ->
     {ok,Fd} = file:open(File, [read, compressed, binary]),
     case file:read(Fd, 4*4) of
 	{ok, <<16#00000803:32, N:32, Rows:32, Columns:32>>} ->
-	    {ok, #nist_image_file { fd=Fd, n=N, rows=Rows, columns=Columns}};
+	    {ok, #nist_image_file { fd=Fd, n=N,
+				    rows=Rows, columns=Columns,
+				    format={uint8,Rows,Columns}
+				  }};
 	{ok,_} ->
 	    {error, bad_magic};
 	E ={error,_Error} ->
 	    E
     end.
+
+info_image_keys() ->
+    [size, rows, columns, format].
+
+info_image_file(F) ->
+    [{Key, info_image_file(F, Key)} || Key <- info_image_keys()].
+
+info_image_file(F, size) -> F#nist_image_file.n;
+info_image_file(F, rows) -> F#nist_image_file.rows;
+info_image_file(F, columns) -> F#nist_image_file.columns;
+info_image_file(F, format) -> F#nist_image_file.format.
+
 
 close_image_file(#nist_image_file { fd=Fd }) ->
     file:close(Fd).
@@ -118,12 +143,24 @@ open_label_file(File) ->
     {ok,Fd} = file:open(File, [read, compressed, binary]),
     case file:read(Fd, 2*4) of
 	{ok, <<16#00000801:32, N:32>>} ->
-	    {ok, #nist_label_file { fd=Fd, n=N }};
+	    {ok, #nist_label_file { fd=Fd, n=N, min=0, max=9, format=uint8 }};
 	{ok,_} ->
 	    {error, bad_magic};
 	E ={error,_Error} ->
 	    E
     end.
+
+info_label_keys() ->
+    [size, min, max, format].
+
+info_label_file(F) ->
+    [{Key, info_label_file(F, Key)} || Key <- info_image_keys()].
+
+info_label_file(F, size) -> F#nist_label_file.n;
+info_label_file(F, min) -> F#nist_label_file.min;
+info_label_file(F, max) -> F#nist_label_file.max;
+info_label_file(F, format) -> F#nist_label_file.format.
+
 
 close_label_file(#nist_label_file { fd=Fd }) ->
     file:close(Fd).

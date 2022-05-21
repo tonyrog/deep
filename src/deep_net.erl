@@ -10,8 +10,14 @@
 -export([new/3]).
 -export([feed/2]).
 -export([sgd/4]).
+-export([sgdf/4]).
+
+-export([avg_netlist/1]).
+-export([copy_netlist/1]).
 
 -compile(export_all).
+
+-include_lib("matrix/include/matrix.hrl").
 
 -define(DEFAULT_ACTIVATION, sigmoid).
 
@@ -75,15 +81,21 @@ feed_([#layer{weights=W,bias=B,activation_fn=F}|Net],A) ->
 feed_([], A) ->
     A.
 
-sgd(Net,TrainingSet,ValidationSet,InputOptions)
-      when is_list(TrainingSet),
-	   is_list(ValidationSet),
-	   is_map(InputOptions) ->
-    Default = #{ eta => 3.0, 
+sgd(Net,TrainingSet,ValidationSet,InputOptions) ->
+    {_, Net1} = sgdf(Net,TrainingSet,ValidationSet,InputOptions),
+    Net1.
+
+%% return {CurrentLearnFactor, Net}
+sgdf(Net,TrainingSet,ValidationSet,InputOptions)
+  when is_list(TrainingSet),
+       is_list(ValidationSet),
+       is_map(InputOptions) ->
+    Default = #{ eta => 3.0,
 		 lmbda => 0.0,
 		 batch_size => 10,
 		 epochs => 20,
 		 k => 0,
+		 max_learn_factor => 1.0,
 		 learn => learn  %% with batch
 	       },
     Options = maps:merge(Default, InputOptions),
@@ -93,24 +105,36 @@ sgd(Net,TrainingSet,ValidationSet,InputOptions)
     Epochs = option(epochs, Options),
     K = option(k, Options),
     L = option(learn, Options),
+    Lf = option(max_learn_factor, Options),
+    Lc = 0.0,
     Tn = length(TrainingSet),
-    sgd_(Net,L,Tn,TrainingSet,ValidationSet,1,Epochs,BatchSize,Eta,Lmbda,K).
+    sgd_(Net,L,Tn,TrainingSet,ValidationSet,1,
+	 Epochs,BatchSize,Eta,Lmbda,Lf,Lc,K).
 
-sgd_(Net,_L,_Tn,_TrainingSet,_ValidationSet,E,Epochs,_BatchSize,_Eta,_Lmbda,_K)
-  when E > Epochs -> Net;
-sgd_(Net,L,Tn,TrainingSet,ValidationSet,E,Epochs,BatchSize,Eta,Lmbda,K) ->
+sgd_(Net,_L,_Tn,_TrainingSet,_ValidationSet,E,Epochs,
+     _BatchSize,_Eta,_Lmbda,_Lf,Lc,_K)
+  when E > Epochs -> 
+    {Lc,Net};
+sgd_(Net,L,Tn,TrainingSet,ValidationSet,E,Epochs,
+     BatchSize,Eta,Lmbda,Lf,_Lc,K) ->
     TrainingSet1 = deep_random:shuffle(TrainingSet),
     T0 = erlang:monotonic_time(),
     Net1 = sgd__(Net,L,Tn,TrainingSet1,BatchSize,Eta,Lmbda,K),
     T1 = erlang:monotonic_time(),
     R = evaluate(Net1,ValidationSet),
     T2 = erlang:monotonic_time(),
-    M = length(ValidationSet),
+    M = max(1,length(ValidationSet)),
     Time1 = erlang:convert_time_unit(T1 - T0, native, microsecond),
     Time2 = erlang:convert_time_unit(T2 - T1, native, microsecond),
+    Learn = (R/M),
     io:format("epoch ~w/~w : learn=~.2f%, train=~.2fs, eval=~.2fs\n", 
-	      [E,Epochs,(R/M)*100,Time1/1000000,Time2/1000000]),
-    sgd_(Net1,L,Tn,TrainingSet,ValidationSet,E+1,Epochs,BatchSize,Eta,Lmbda,K).
+	      [E,Epochs,Learn*100,Time1/1000000,Time2/1000000]),
+    if Learn > Lf ->
+	    {Learn,Net1};
+       true ->
+	    sgd_(Net1,L,Tn,TrainingSet,ValidationSet,E+1,Epochs,
+		 BatchSize,Eta,Lmbda,Lf,Learn,K)
+    end.
 
 %% loop over batches and train the net
 sgd__(Net,_L, _Tn, [], _BatchSize, _Eta, _Lmbda, _K) ->
@@ -261,13 +285,62 @@ evaluate(Net, TestData) ->
 
 evaluate_(Net, [{X,Y}|TestData], Sum) ->
     Y1 = feed(Net, X),
-    {I,J} = matrix:argmax(Y1,0),
-    Yi = I-1,
-    if Y =:= Yi -> evaluate_(Net, TestData, Sum+1);
-       true -> evaluate_(Net, TestData, Sum)
-    end;
+    Si = match_output(Y1, Y),
+    evaluate_(Net, TestData, Sum+Si);
 evaluate_(_Net, [], Sum) ->
     Sum.
+
+%%
+%% Match = [{Pos,Len,Value}]  Pos = 1-based
+%%
+
+match_output(Out, Value) when is_integer(Value) ->
+    case matrix:argmax(Out,0) of
+	{Value, _} -> 1;
+	_ -> 0
+    end;
+match_output(Out, MatchList) when is_list(MatchList) ->
+    match_output_list(Out, MatchList).
+
+match_output_list(Out, [{Pos,Len,Value}|MatchList]) ->
+    Out1 = matrix:column(1,Pos,Pos+Len-1,Out),
+    case matrix:argmax(Out1,0) of
+	{Value,_} ->
+	    match_output_list(Out, MatchList);
+	{_,_} ->
+	    0
+    end;
+match_output_list(_Out, []) ->
+    1.
+
+%% average list of nets, layers must match!
+avg_netlist([Net|NetList]) ->
+    avg_netlist_(NetList, 1, Net).
+
+avg_netlist_([Net1|NetList], N, Net) ->
+    avg_netlist_(NetList, N+1, add_net(Net1, Net));
+avg_netlist_([], N, Net) ->
+    divide_net(Net, N).
+
+copy_netlist(Net) ->
+    Net. %%??
+
+add_net([L | Ls], [M | Ms]) when
+      L#layer.inputs =:= M#layer.inputs, 
+      L#layer.outputs =:= M#layer.outputs ->
+    W = matrix:add(L#layer.weights, M#layer.weights),
+    B = matrix:add(L#layer.bias, M#layer.bias),
+    [L#layer { weights = W, bias = B } | add_net(Ls, Ms)];
+add_net([], []) ->
+    [].
+
+divide_net([L|Ls], N) ->
+    [L#layer{ weights = matrix:divide(L#layer.weights, N),
+	      bias = matrix:divide(L#layer.bias, N) } |
+     divide_net(Ls, N)];
+divide_net([], _N) ->
+    [].
+
 
 %% options
 option(Key, Options) ->
@@ -290,6 +363,8 @@ option_(Key, Options, Default) ->
 validate(k, Value) when is_integer(Value), Value >= 0 -> Value;
 validate(eta, Value) when is_number(Value), Value >= 0 -> Value;
 validate(learning_rate, Value) when is_number(Value), Value >= 0 -> Value;
+validate(max_learn_factor, Value) when is_number(Value), Value >= 0,
+				       Value =< 1.0 -> Value;
 validate(lmbda, Value) when is_number(Value), Value >= 0 -> Value;
 validate(regularization, Value) when is_number(Value), Value >= 0 -> Value;
 validate(epochs, Value) when is_integer(Value), Value >= 0 -> Value;
@@ -332,9 +407,4 @@ dump(I,[L=#layer { inputs=N, outputs=M, activation=A } | Ls]) ->
 dump(_, []) ->
     ok.
 
-
-
-    
-    
-    
 
