@@ -43,7 +43,9 @@ main_fed() ->
 main_fed(N) ->
     main_fed(N, #{epochs => 10,
 		  batch_size=>10,
-		  learning_rate=>3.0}).
+		  max_learn_factor => 0.96,
+		  learning_rate=>3.0
+		 }).
     
 main_fed(N, Options) ->
     TTrain = 10000,
@@ -57,8 +59,15 @@ main_fed(N, Options) ->
     NetList = [deep_net:new(784,Hidden,{Otype,10}) || _ <- lists:seq(1, N)],
     FTrain = fun(_Data) -> true end,
     FValid = fun(_Data) -> true end,
-    Training = load_fed(N, Vt, NTrain, FTrain, Vi, NValid, FValid, []),
-    fed_loop(NetList, 1, Options, Training,Training,1.0,[]).
+    Training = load_fed_1valid(N, Vt, NTrain, FTrain, Vi, NValid, FValid),
+    %% Training = load_fed(N, Vt, NTrain, FTrain, Vi, NValid, FValid),
+    fed_loop(NetList,1,Options,Training,Training,1.0,[]).
+
+%%
+%% load N training sets and N validation sets
+%%
+load_fed(N, Vt, NTrain, FTrain, Vi, NValid, FValid) ->
+    load_fed(N, Vt, NTrain, FTrain, Vi, NValid, FValid, []).
 
 load_fed(0, _Vt, _NTrain, _FTrain, _Vi, _NValid, _FValid, Sets) ->
     Sets;
@@ -69,14 +78,26 @@ load_fed(I, Vt, NTrain, FTrain, Vi, NValid, FValid, Sets) ->
     Valid = [ {X,Y+1} || {X,Y} <- Valid0],
     load_fed(I-1, Vt+NTrain, NTrain, FTrain, 
 	     Vi+NValid, NValid, FValid, [{Train,Valid}|Sets]).
+%%
+%% load N training sets but only one validation set
+%%
+load_fed_1valid(N, Vt, NTrain, FTrain, Vi, NValid, FValid) ->
+    Valid = load(Vi, NValid, FValid, fun nist:image_to_vector/1),
+    load_fed_1valid(N, Vt, NTrain, FTrain, Valid, []).
 
+load_fed_1valid(0, _Vt, _NTrain, _FTrain, _Valid, Sets) ->
+    Sets;
+load_fed_1valid(I, Vt, NTrain, FTrain, Valid, Sets) ->
+    Train0 = load(Vt, NTrain, FTrain, fun nist:image_to_vector/1),
+    Train = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- Train0],
+    load_fed_1valid(I-1,Vt+NTrain,NTrain,FTrain,Valid,[{Train,Valid}|Sets]).
 
 %% try divide and conquer digit by digit
 
 main_digit_fed() ->
-    main_digit_fed(#{epochs => 2,
+    main_digit_fed(#{epochs => 1,
 		     batch_size => 10,
-		     max_learn_factor => 0.50,
+		     max_learn_factor => 0.60,
 		     learning_rate=>4.0}).
     
 main_digit_fed(Options) ->
@@ -90,22 +111,25 @@ main_digit_fed(Options) ->
     Hidden =  [{sigmoid,30}],
     Otype  = sigmoid,
     NetList = [deep_net:new(784,Hidden,{Otype,10}) || _ <- lists:seq(1, N)],
-    Training = load_digit_fed(0, 2*N, Vt, NTrain, Vi, NValid, []),
+    Training = load_digit_fed(2*N, Vt, NTrain, Vi, NValid),
     fed_loop(NetList, 1, Options, Training,Training,1.0,[]).
 
 %% load set training each digit but validate for anything
 %% not 2 digits at a time
-load_digit_fed(I, N, _Vt, _NTrain, _Vi, _NValid, Sets) when I >= N ->
-    Sets;
-load_digit_fed(I, N, Vt, NTrain, Vi, NValid, Sets) ->
-    FTrain = fun({_Img,L}) -> (L =:= I) orelse (L =:= I+1) end,
+load_digit_fed(N, Vt, NTrain, Vi, NValid) ->
     FValid = fun(_Data) -> true end,
-    Train0 = load(Vt, NTrain, FTrain, fun nist:image_to_vector/1),
     Valid0 = load(Vi, NValid, FValid, fun nist:image_to_vector/1),
-    Train = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- Train0],
     Valid = [ {X,Y+1} || {X,Y} <- Valid0],
-    load_digit_fed(I+2,N, Vt+NTrain, NTrain, 
-		   Vi+NValid, NValid, [{Train,Valid}|Sets]).
+    load_digit_fed_(0, N, Vt, NTrain, Valid, []).
+
+load_digit_fed_(I, N, _Vt, _NTrain, _Valid, Sets) when I >= N ->
+    Sets;
+load_digit_fed_(I, N, Vt, NTrain, Valid, Sets) ->
+    FTrain = fun({_Img,L}) -> (L =:= I) orelse (L =:= I+1) end,
+    Train0 = load(Vt, NTrain, FTrain, fun nist:image_to_vector/1),
+    Train = [ {X,nist:label_to_matrix(Y)} || {X,Y} <- Train0],
+    load_digit_fed_(I+2,N, Vt+NTrain, NTrain, 
+		    Valid, [{Train,Valid}|Sets]).
 
 fed_loop([Net|Ns], Round, Options, [{Train,Valid}|Sets], Sets0, MinLf, Acc) ->
     {Lf,Net1} = deep_net:sgdf(Net, Train, Valid, Options),
